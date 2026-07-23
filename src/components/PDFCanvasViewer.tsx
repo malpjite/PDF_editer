@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { usePDF } from '../context/PDFContext';
 import type { Annotation, Point } from '../types/pdf';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Edit3, Trash2 } from 'lucide-react';
 
 export const PDFCanvasViewer: React.FC = () => {
   const {
@@ -41,6 +41,15 @@ export const PDFCanvasViewer: React.FC = () => {
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [textInput, setTextInput] = useState<string>('');
 
+  // Dragging annotations state
+  const [dragInfo, setDragInfo] = useState<{
+    id: string;
+    startX: number;
+    startY: number;
+    initAnnX: number;
+    initAnnY: number;
+  } | null>(null);
+
   const activePages = pageOrder.filter((idx) => !deletedPages.has(idx));
   const origPageIndex = activePages[currentPage - 1] ?? 0;
   const rotation = pageRotations[origPageIndex] || 0;
@@ -71,7 +80,7 @@ export const PDFCanvasViewer: React.FC = () => {
           overlayCanvasRef.current.height = viewport.height;
         }
 
-        await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
+        await (page as any).render({ canvasContext: ctx, viewport, canvas }).promise;
       } catch (err) {
         console.error('PDF Page render error:', err);
       }
@@ -117,9 +126,9 @@ export const PDFCanvasViewer: React.FC = () => {
         type: 'text',
         x: coords.x,
         y: coords.y,
-        width: 160,
+        width: 180,
         height: 36,
-        content: 'Nhập nội dung...',
+        content: 'Nhập chữ tại đây...',
         fontSize: toolOptions.fontSize,
         fontFamily: toolOptions.fontFamily,
         color: toolOptions.color,
@@ -127,12 +136,22 @@ export const PDFCanvasViewer: React.FC = () => {
       addAnnotation(origPageIndex, newText);
       setSelectedAnnotationId(textId);
       setEditingTextId(textId);
-      setTextInput('Nhập nội dung...');
+      setTextInput('Nhập chữ tại đây...');
       setActiveTool('select');
     }
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (dragInfo) {
+      const dx = e.clientX - dragInfo.startX;
+      const dy = e.clientY - dragInfo.startY;
+      updateAnnotation(dragInfo.id, {
+        x: Math.round(dragInfo.initAnnX + dx),
+        y: Math.round(dragInfo.initAnnY + dy),
+      });
+      return;
+    }
+
     if (!isDrawing) return;
     const coords = getCanvasCoords(e);
 
@@ -150,6 +169,11 @@ export const PDFCanvasViewer: React.FC = () => {
   };
 
   const handleMouseUp = () => {
+    if (dragInfo) {
+      setDragInfo(null);
+      return;
+    }
+
     if (!isDrawing) return;
     setIsDrawing(false);
 
@@ -195,6 +219,39 @@ export const PDFCanvasViewer: React.FC = () => {
       }
       setShapeStart(null);
       setCurrentShapeEnd(null);
+    }
+  };
+
+  const handleStartDrag = (e: React.MouseEvent, ann: Annotation) => {
+    e.stopPropagation();
+    setSelectedAnnotationId(ann.id);
+    if (activeTool === 'eraser') {
+      removeAnnotation(ann.id);
+      return;
+    }
+    setDragInfo({
+      id: ann.id,
+      startX: e.clientX,
+      startY: e.clientY,
+      initAnnX: ann.x,
+      initAnnY: ann.y,
+    });
+  };
+
+  const handleContainerMouseMove = (e: React.MouseEvent) => {
+    if (dragInfo) {
+      const dx = e.clientX - dragInfo.startX;
+      const dy = e.clientY - dragInfo.startY;
+      updateAnnotation(dragInfo.id, {
+        x: Math.round(dragInfo.initAnnX + dx),
+        y: Math.round(dragInfo.initAnnY + dy),
+      });
+    }
+  };
+
+  const handleContainerMouseUp = () => {
+    if (dragInfo) {
+      setDragInfo(null);
     }
   };
 
@@ -247,6 +304,8 @@ export const PDFCanvasViewer: React.FC = () => {
   return (
     <div
       ref={containerRef}
+      onMouseMove={handleContainerMouseMove}
+      onMouseUp={handleContainerMouseUp}
       style={{
         flex: 1,
         height: '100%',
@@ -298,11 +357,7 @@ export const PDFCanvasViewer: React.FC = () => {
             return (
               <div
                 key={ann.id}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedAnnotationId(ann.id);
-                  if (activeTool === 'eraser') removeAnnotation(ann.id);
-                }}
+                onMouseDown={(e) => handleStartDrag(e, ann)}
                 onDoubleClick={() => {
                   setEditingTextId(ann.id);
                   setTextInput(ann.content);
@@ -315,13 +370,18 @@ export const PDFCanvasViewer: React.FC = () => {
                   fontSize: ann.fontSize + 'px',
                   fontFamily: ann.fontFamily,
                   fontWeight: ann.bold ? 'bold' : 'normal',
-                  padding: '2px 6px',
+                  padding: '4px 8px',
                   borderRadius: '4px',
-                  border: isSelected ? '2px dashed var(--accent-primary)' : '1px solid transparent',
-                  cursor: 'move',
+                  background: isSelected ? 'rgba(99, 102, 241, 0.15)' : 'rgba(255, 255, 255, 0.65)',
+                  border: isSelected ? '2px solid var(--accent-primary)' : '1px solid rgba(0,0,0,0.15)',
+                  boxShadow: isSelected ? 'var(--shadow-md)' : 'none',
+                  cursor: 'grab',
                   zIndex: 20,
                   whiteSpace: 'pre-wrap',
                   userSelect: 'none',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
                 }}
               >
                 {editingTextId === ann.id ? (
@@ -341,43 +401,57 @@ export const PDFCanvasViewer: React.FC = () => {
                       }
                     }}
                     style={{
-                      background: 'rgba(0,0,0,0.8)',
-                      color: '#fff',
+                      background: '#1e293b',
+                      color: '#ffffff',
                       border: 'none',
                       fontSize: 'inherit',
-                      padding: '2px 4px',
-                      borderRadius: '2px',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      outline: 'none',
                     }}
                   />
                 ) : (
-                  ann.content
+                  <span>{ann.content}</span>
                 )}
 
-                {isSelected && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeAnnotation(ann.id);
-                    }}
-                    style={{
-                      position: 'absolute',
-                      top: '-12px',
-                      right: '-12px',
-                      background: 'var(--danger)',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: '50%',
-                      width: '20px',
-                      height: '20px',
-                      cursor: 'pointer',
-                      fontSize: '10px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    ×
-                  </button>
+                {isSelected && editingTextId !== ann.id && (
+                  <div style={{ display: 'flex', gap: '4px', marginLeft: '6px' }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingTextId(ann.id);
+                        setTextInput(ann.content);
+                      }}
+                      style={{
+                        background: 'var(--accent-primary)',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '3px',
+                        padding: '2px 4px',
+                        cursor: 'pointer',
+                      }}
+                      title="Sửa chữ"
+                    >
+                      <Edit3 size={12} />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeAnnotation(ann.id);
+                      }}
+                      style={{
+                        background: 'var(--danger)',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '3px',
+                        padding: '2px 4px',
+                        cursor: 'pointer',
+                      }}
+                      title="Xóa"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
                 )}
               </div>
             );
@@ -387,11 +461,7 @@ export const PDFCanvasViewer: React.FC = () => {
             return (
               <div
                 key={ann.id}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedAnnotationId(ann.id);
-                  if (activeTool === 'eraser') removeAnnotation(ann.id);
-                }}
+                onMouseDown={(e) => handleStartDrag(e, ann)}
                 style={{
                   position: 'absolute',
                   left: ann.x,
@@ -405,7 +475,7 @@ export const PDFCanvasViewer: React.FC = () => {
                   backgroundColor: ann.type === 'whiteout' ? '#ffffff' : ann.fillColor,
                   borderRadius: ann.type === 'circle' ? '50%' : '0',
                   outline: isSelected ? '2px dashed var(--accent-primary)' : 'none',
-                  cursor: 'move',
+                  cursor: 'grab',
                   zIndex: 20,
                 }}
               >
@@ -439,11 +509,7 @@ export const PDFCanvasViewer: React.FC = () => {
             return (
               <div
                 key={ann.id}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedAnnotationId(ann.id);
-                  if (activeTool === 'eraser') removeAnnotation(ann.id);
-                }}
+                onMouseDown={(e) => handleStartDrag(e, ann)}
                 style={{
                   position: 'absolute',
                   left: ann.x,
@@ -451,7 +517,7 @@ export const PDFCanvasViewer: React.FC = () => {
                   width: ann.width,
                   height: ann.height,
                   border: isSelected ? '2px dashed var(--accent-primary)' : 'none',
-                  cursor: 'move',
+                  cursor: 'grab',
                   zIndex: 25,
                 }}
               >
@@ -490,11 +556,7 @@ export const PDFCanvasViewer: React.FC = () => {
             return (
               <div
                 key={ann.id}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedAnnotationId(ann.id);
-                  if (activeTool === 'eraser') removeAnnotation(ann.id);
-                }}
+                onMouseDown={(e) => handleStartDrag(e, ann)}
                 style={{
                   position: 'absolute',
                   left: ann.x,
@@ -513,7 +575,7 @@ export const PDFCanvasViewer: React.FC = () => {
                   background: 'rgba(255,255,255,0.95)',
                   boxShadow: 'var(--shadow-sm)',
                   borderRadius: '4px',
-                  cursor: 'move',
+                  cursor: 'grab',
                   zIndex: 25,
                   userSelect: 'none',
                 }}
