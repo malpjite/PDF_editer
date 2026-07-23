@@ -1,5 +1,5 @@
 import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
-import type { Annotation, WatermarkOptions, PageNumberOptions } from '../types/pdf';
+import type { Annotation, WatermarkOptions, PageNumberOptions, PDFMetadata } from '../types/pdf';
 
 // Convert hex color (#rrggbb) or rgba to pdf-lib rgb
 const parseColor = (colorStr: string) => {
@@ -26,10 +26,20 @@ export async function exportModifiedPDF(
   deletedPages: Set<number>,
   annotations: Record<number, Annotation[]>,
   watermark?: WatermarkOptions | null,
-  pageNumbering?: PageNumberOptions | null
+  pageNumbering?: PageNumberOptions | null,
+  metadata?: PDFMetadata | null
 ): Promise<Uint8Array> {
   const originalDoc = await PDFDocument.load(originalPdfBytes);
   const newDoc = await PDFDocument.create();
+
+  // Embed Metadata
+  if (metadata) {
+    if (metadata.title) newDoc.setTitle(metadata.title);
+    if (metadata.author) newDoc.setAuthor(metadata.author);
+    if (metadata.subject) newDoc.setSubject(metadata.subject);
+    if (metadata.keywords) newDoc.setKeywords(metadata.keywords.split(',').map((k) => k.trim()));
+    if (metadata.creator) newDoc.setCreator(metadata.creator);
+  }
 
   const standardFont = await newDoc.embedFont(StandardFonts.Helvetica);
   const boldFont = await newDoc.embedFont(StandardFonts.HelveticaBold);

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState } from 'react';
-import type { Annotation, ToolType, ToolOptions, ModalType, WatermarkOptions, PageNumberOptions } from '../types/pdf';
+import type { Annotation, ToolType, ToolOptions, ModalType, WatermarkOptions, PageNumberOptions, PDFMetadata } from '../types/pdf';
 import { pdfjs } from '../utils/pdfWorker';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { PDFDocument } from 'pdf-lib';
@@ -30,6 +30,7 @@ interface PDFContextType {
   activeModal: ModalType;
   watermark: WatermarkOptions | null;
   pageNumbering: PageNumberOptions | null;
+  metadata: PDFMetadata;
 
   // Actions
   loadFile: (file: File) => Promise<void>;
@@ -43,6 +44,7 @@ interface PDFContextType {
   setSelectedAnnotationId: (id: string | null) => void;
   setWatermark: (watermark: WatermarkOptions | null) => void;
   setPageNumbering: (pageNumbering: PageNumberOptions | null) => void;
+  setMetadata: React.Dispatch<React.SetStateAction<PDFMetadata>>;
 
   // Annotation Manipulation
   addAnnotation: (pageIndex: number, annotation: Annotation) => void;
@@ -56,6 +58,9 @@ interface PDFContextType {
   insertBlankPage: (afterDisplayIndex: number) => Promise<void>;
   duplicatePage: (displayIndex: number) => Promise<void>;
   extractSelectedPages: (selectedDisplayIndices: number[]) => Promise<Uint8Array | null>;
+  reversePageOrder: () => void;
+  filterEvenOddPages: (type: 'even' | 'odd') => void;
+  applyNUpLayout: (pagesPerSheet: 2 | 4) => Promise<void>;
 
   // History
   undo: () => void;
@@ -93,6 +98,7 @@ export const PDFProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [watermark, setWatermark] = useState<WatermarkOptions | null>(null);
   const [pageNumbering, setPageNumbering] = useState<PageNumberOptions | null>(null);
+  const [metadata, setMetadata] = useState<PDFMetadata>({});
 
   const [annotations, setAnnotations] = useState<Record<number, Annotation[]>>({});
   const [pageOrder, setPageOrder] = useState<number[]>([]);
@@ -133,6 +139,22 @@ export const PDFProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setFileName(name);
       setNumPages(doc.numPages);
       setCurrentPage(1);
+
+      // Extract metadata if available
+      try {
+        const meta = await doc.getMetadata();
+        const info = (meta.info as any) || {};
+        setMetadata({
+          title: info.Title || name.replace('.pdf', ''),
+          author: info.Author || '',
+          subject: info.Subject || '',
+          keywords: info.Keywords || '',
+          creator: info.Creator || 'OmniPDF Studio',
+          producer: info.Producer || 'pdf-lib',
+        });
+      } catch (e) {
+        setMetadata({ title: name });
+      }
 
       const initialOrder = Array.from({ length: doc.numPages }, (_, i) => i);
       setPageOrder(initialOrder);
@@ -224,6 +246,26 @@ export const PDFProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     saveHistorySnapshot(annotations, pageOrder, pageRotations, nextDeleted);
   };
 
+  const reversePageOrder = () => {
+    const reversed = [...pageOrder].reverse();
+    setPageOrder(reversed);
+    saveHistorySnapshot(annotations, reversed, pageRotations, deletedPages);
+  };
+
+  const filterEvenOddPages = (type: 'even' | 'odd') => {
+    const nextDeleted = new Set(deletedPages);
+    pageOrder.forEach((origIdx, displayIdx) => {
+      const pageNum = displayIdx + 1;
+      if (type === 'even' && pageNum % 2 !== 0) {
+        nextDeleted.add(origIdx);
+      } else if (type === 'odd' && pageNum % 2 === 0) {
+        nextDeleted.add(origIdx);
+      }
+    });
+    setDeletedPages(nextDeleted);
+    saveHistorySnapshot(annotations, pageOrder, pageRotations, nextDeleted);
+  };
+
   // Insert a new blank page into pdfBytes
   const insertBlankPage = async (afterDisplayIndex: number) => {
     if (!pdfBytes) return;
@@ -273,6 +315,68 @@ export const PDFProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // N-Up Layout Generator (Stirling-PDF style)
+  const applyNUpLayout = async (pagesPerSheet: 2 | 4) => {
+    if (!pdfBytes) return;
+    try {
+      const srcDoc = await PDFDocument.load(pdfBytes);
+      const outDoc = await PDFDocument.create();
+
+      const activeIndices = pageOrder.filter((idx) => !deletedPages.has(idx));
+
+      if (pagesPerSheet === 2) {
+        // 2-Up: Combined onto A4 Landscape (841.89 x 595.28)
+        for (let i = 0; i < activeIndices.length; i += 2) {
+          const sheet = outDoc.addPage([841.89, 595.28]);
+          const embedded1 = await outDoc.embedPage((await srcDoc.copyPages(srcDoc, [activeIndices[i]]))[0]);
+          sheet.drawPage(embedded1, {
+            x: 20,
+            y: 20,
+            width: 390,
+            height: 555,
+          });
+
+          if (i + 1 < activeIndices.length) {
+            const embedded2 = await outDoc.embedPage((await srcDoc.copyPages(srcDoc, [activeIndices[i + 1]]))[0]);
+            sheet.drawPage(embedded2, {
+              x: 430,
+              y: 20,
+              width: 390,
+              height: 555,
+            });
+          }
+        }
+      } else {
+        // 4-Up: Combined onto A4 Portrait (595.28 x 841.89) 2x2 Grid
+        for (let i = 0; i < activeIndices.length; i += 4) {
+          const sheet = outDoc.addPage([595.28, 841.89]);
+          const coords = [
+            { x: 15, y: 430 },
+            { x: 300, y: 430 },
+            { x: 15, y: 20 },
+            { x: 300, y: 20 },
+          ];
+
+          for (let k = 0; k < 4 && i + k < activeIndices.length; k++) {
+            const embedded = await outDoc.embedPage((await srcDoc.copyPages(srcDoc, [activeIndices[i + k]]))[0]);
+            sheet.drawPage(embedded, {
+              x: coords[k].x,
+              y: coords[k].y,
+              width: 275,
+              height: 390,
+            });
+          }
+        }
+      }
+
+      const outBytes = await outDoc.save();
+      await loadBytes(outBytes, `NUp_${pagesPerSheet}Up_${fileName}`);
+    } catch (err) {
+      console.error('N-Up layout error:', err);
+      alert('Lỗi ghép N-Up trang.');
+    }
+  };
+
   const undo = () => {
     if (historyIndex > 0) {
       const prevIndex = historyIndex - 1;
@@ -311,6 +415,7 @@ export const PDFProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setHistoryIndex(-1);
     setWatermark(null);
     setPageNumbering(null);
+    setMetadata({});
   };
 
   return (
@@ -334,6 +439,7 @@ export const PDFProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeModal,
         watermark,
         pageNumbering,
+        metadata,
         loadFile,
         loadBytes,
         setCurrentPage,
@@ -345,6 +451,7 @@ export const PDFProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSelectedAnnotationId,
         setWatermark,
         setPageNumbering,
+        setMetadata,
         addAnnotation,
         updateAnnotation,
         removeAnnotation,
@@ -354,6 +461,9 @@ export const PDFProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         insertBlankPage,
         duplicatePage,
         extractSelectedPages,
+        reversePageOrder,
+        filterEvenOddPages,
+        applyNUpLayout,
         undo,
         redo,
         canUndo: historyIndex > 0,

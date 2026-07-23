@@ -114,6 +114,15 @@ export interface PageNumberOptions {
   startNumber: number;
 }
 
+export interface PDFMetadata {
+  title?: string;
+  author?: string;
+  subject?: string;
+  keywords?: string;
+  creator?: string;
+  producer?: string;
+}
+
 export type ModalType =
   | null
   | 'signature'
@@ -126,4 +135,7 @@ export type ModalType =
   | 'watermark'
   | 'page-number'
   | 'ai-assistant'
-  | 'insert-page';
+  | 'insert-page'
+  | 'metadata'
+  | 'nup'
+  | 'page-matrix';
