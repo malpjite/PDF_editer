@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { usePDF } from '../context/PDFContext';
 import type { Annotation, Point } from '../types/pdf';
-import { ChevronLeft, ChevronRight, Edit3, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Edit3, Trash2, Check } from 'lucide-react';
 
 export const PDFCanvasViewer: React.FC = () => {
   const {
@@ -239,6 +239,8 @@ export const PDFCanvasViewer: React.FC = () => {
 
   const handleStartDrag = (e: React.MouseEvent, ann: Annotation) => {
     e.stopPropagation();
+    if (editingTextId === ann.id) return; // Do not start drag while typing inside text input
+
     setSelectedAnnotationId(ann.id);
     if (activeTool === 'eraser') {
       removeAnnotation(ann.id);
@@ -268,6 +270,11 @@ export const PDFCanvasViewer: React.FC = () => {
     if (dragInfo) {
       setDragInfo(null);
     }
+  };
+
+  const handleSaveText = (id: string) => {
+    updateAnnotation(id, { content: textInput });
+    setEditingTextId(null);
   };
 
   useEffect(() => {
@@ -353,6 +360,7 @@ export const PDFCanvasViewer: React.FC = () => {
             position: 'absolute',
             top: 0,
             left: 0,
+            pointerEvents: activeTool === 'select' ? 'none' : 'auto',
             cursor:
               activeTool === 'draw' || activeTool === 'highlight'
                 ? 'crosshair'
@@ -369,11 +377,17 @@ export const PDFCanvasViewer: React.FC = () => {
           const isSelected = selectedAnnotationId === ann.id;
 
           if (ann.type === 'text') {
+            const isEditing = editingTextId === ann.id;
             return (
               <div
                 key={ann.id}
                 onMouseDown={(e) => handleStartDrag(e, ann)}
-                onDoubleClick={() => {
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedAnnotationId(ann.id);
+                }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
                   setEditingTextId(ann.id);
                   setTextInput(ann.content);
                 }}
@@ -387,49 +401,70 @@ export const PDFCanvasViewer: React.FC = () => {
                   fontWeight: ann.bold ? 'bold' : 'normal',
                   padding: '4px 8px',
                   borderRadius: '4px',
-                  background: isSelected ? 'rgba(99, 102, 241, 0.15)' : 'rgba(255, 255, 255, 0.65)',
-                  border: isSelected ? '2px solid var(--accent-primary)' : '1px solid rgba(0,0,0,0.15)',
-                  boxShadow: isSelected ? 'var(--shadow-md)' : 'none',
-                  cursor: 'grab',
-                  zIndex: 20,
+                  background: isSelected ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255, 255, 255, 0.85)',
+                  border: isSelected ? '2px solid var(--accent-primary)' : '1px solid rgba(0,0,0,0.2)',
+                  boxShadow: isSelected ? '0 0 10px rgba(99, 102, 241, 0.4)' : 'none',
+                  cursor: isEditing ? 'text' : 'move',
+                  zIndex: 30,
                   whiteSpace: 'pre-wrap',
-                  userSelect: 'none',
+                  userSelect: isEditing ? 'text' : 'none',
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '6px',
                 }}
               >
-                {editingTextId === ann.id ? (
-                  <input
-                    type="text"
-                    value={textInput}
-                    autoFocus
-                    onChange={(e) => setTextInput(e.target.value)}
-                    onBlur={() => {
-                      updateAnnotation(ann.id, { content: textInput });
-                      setEditingTextId(null);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        updateAnnotation(ann.id, { content: textInput });
-                        setEditingTextId(null);
-                      }
-                    }}
-                    style={{
-                      background: '#1e293b',
-                      color: '#ffffff',
-                      border: 'none',
-                      fontSize: 'inherit',
-                      padding: '2px 6px',
-                      borderRadius: '4px',
-                      outline: 'none',
-                    }}
-                  />
+                {isEditing ? (
+                  <div
+                    style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="text"
+                      value={textInput}
+                      autoFocus
+                      onChange={(e) => setTextInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleSaveText(ann.id);
+                        }
+                      }}
+                      style={{
+                        background: '#0f172a',
+                        color: '#ffffff',
+                        border: '1px solid var(--accent-primary)',
+                        fontSize: 'inherit',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        outline: 'none',
+                        minWidth: '160px',
+                      }}
+                    />
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSaveText(ann.id);
+                      }}
+                      style={{
+                        background: '#10b981',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '4px',
+                        padding: '4px 8px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                      }}
+                      title="Lưu chữ"
+                    >
+                      <Check size={14} />
+                    </button>
+                  </div>
                 ) : (
                   <span>{ann.content}</span>
                 )}
 
-                {isSelected && editingTextId !== ann.id && (
+                {isSelected && !isEditing && (
                   <div style={{ display: 'flex', gap: '4px', marginLeft: '6px' }}>
                     <button
                       onClick={(e) => {
@@ -442,12 +477,16 @@ export const PDFCanvasViewer: React.FC = () => {
                         color: '#fff',
                         border: 'none',
                         borderRadius: '3px',
-                        padding: '2px 4px',
+                        padding: '3px 6px',
                         cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '2px',
+                        fontSize: '0.75rem',
                       }}
                       title="Sửa chữ"
                     >
-                      <Edit3 size={12} />
+                      <Edit3 size={12} /> Sửa
                     </button>
                     <button
                       onClick={(e) => {
@@ -459,8 +498,11 @@ export const PDFCanvasViewer: React.FC = () => {
                         color: '#fff',
                         border: 'none',
                         borderRadius: '3px',
-                        padding: '2px 4px',
+                        padding: '3px 6px',
                         cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        fontSize: '0.75rem',
                       }}
                       title="Xóa"
                     >
@@ -477,6 +519,10 @@ export const PDFCanvasViewer: React.FC = () => {
               <div
                 key={ann.id}
                 onMouseDown={(e) => handleStartDrag(e, ann)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedAnnotationId(ann.id);
+                }}
                 style={{
                   position: 'absolute',
                   left: ann.x,
@@ -490,7 +536,7 @@ export const PDFCanvasViewer: React.FC = () => {
                   backgroundColor: ann.type === 'whiteout' ? '#ffffff' : ann.fillColor,
                   borderRadius: ann.type === 'circle' ? '50%' : '0',
                   outline: isSelected ? '2px dashed var(--accent-primary)' : 'none',
-                  cursor: 'grab',
+                  cursor: 'move',
                   zIndex: 20,
                 }}
               >
@@ -525,6 +571,10 @@ export const PDFCanvasViewer: React.FC = () => {
               <div
                 key={ann.id}
                 onMouseDown={(e) => handleStartDrag(e, ann)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedAnnotationId(ann.id);
+                }}
                 style={{
                   position: 'absolute',
                   left: ann.x,
@@ -532,7 +582,7 @@ export const PDFCanvasViewer: React.FC = () => {
                   width: ann.width,
                   height: ann.height,
                   border: isSelected ? '2px dashed var(--accent-primary)' : 'none',
-                  cursor: 'grab',
+                  cursor: 'move',
                   zIndex: 25,
                 }}
               >
@@ -572,6 +622,10 @@ export const PDFCanvasViewer: React.FC = () => {
               <div
                 key={ann.id}
                 onMouseDown={(e) => handleStartDrag(e, ann)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedAnnotationId(ann.id);
+                }}
                 style={{
                   position: 'absolute',
                   left: ann.x,
@@ -590,7 +644,7 @@ export const PDFCanvasViewer: React.FC = () => {
                   background: 'rgba(255,255,255,0.95)',
                   boxShadow: 'var(--shadow-sm)',
                   borderRadius: '4px',
-                  cursor: 'grab',
+                  cursor: 'move',
                   zIndex: 25,
                   userSelect: 'none',
                 }}
