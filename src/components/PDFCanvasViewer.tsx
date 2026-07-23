@@ -55,9 +55,10 @@ export const PDFCanvasViewer: React.FC = () => {
   const rotation = pageRotations[origPageIndex] || 0;
   const currentAnns = annotations[origPageIndex] || [];
 
-  // Render PDF Page onto base canvas
+  // Render PDF Page onto base canvas with cancellation token
   useEffect(() => {
     let isCancelled = false;
+    let renderTask: any = null;
 
     const renderPage = async () => {
       if (!pdfDocument || !pdfCanvasRef.current) return;
@@ -80,15 +81,25 @@ export const PDFCanvasViewer: React.FC = () => {
           overlayCanvasRef.current.height = viewport.height;
         }
 
-        await (page as any).render({ canvasContext: ctx, viewport, canvas }).promise;
-      } catch (err) {
-        console.error('PDF Page render error:', err);
+        renderTask = (page as any).render({ canvasContext: ctx, viewport, canvas });
+        await renderTask.promise;
+      } catch (err: any) {
+        if (err?.name !== 'RenderingCancelledException') {
+          console.error('PDF Page render error:', err);
+        }
       }
     };
 
     renderPage();
     return () => {
       isCancelled = true;
+      if (renderTask) {
+        try {
+          renderTask.cancel();
+        } catch (e) {
+          // ignore cancellation exception
+        }
+      }
     };
   }, [pdfDocument, origPageIndex, scale, rotation]);
 
@@ -104,6 +115,10 @@ export const PDFCanvasViewer: React.FC = () => {
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const coords = getCanvasCoords(e);
+
+    // Clear active selection or editing mode when clicking canvas background
+    if (editingTextId) setEditingTextId(null);
+    if (selectedAnnotationId) setSelectedAnnotationId(null);
 
     if (activeTool === 'draw' || activeTool === 'highlight') {
       setIsDrawing(true);

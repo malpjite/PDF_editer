@@ -35,8 +35,11 @@ export const OCRModal: React.FC = () => {
       await (page as any).render({ canvasContext: ctx, viewport, canvas }).promise;
       const imageDataUrl = canvas.toDataURL('image/png');
 
-      setStatusText('Đang nạp dữ liệu nhận dạng ngôn ngữ...');
-      const worker = await createWorker(lang as string, 1, {
+      setStatusText('Đang nạp mô hình AI nhận dạng...');
+      // Pass language as Array for Tesseract.js v7 multi-language support ('vie+eng' -> ['vie', 'eng'])
+      const langParam = lang === 'vie+eng' ? ['vie', 'eng'] : lang;
+
+      const worker = await createWorker(langParam, 1, {
         logger: (m) => {
           if (m.status === 'recognizing text') {
             setProgress(Math.round(m.progress * 100));
@@ -56,7 +59,7 @@ export const OCRModal: React.FC = () => {
       setStatusText('Nhận dạng hoàn tất!');
     } catch (err) {
       console.error('OCR error:', err);
-      alert('Đã xảy ra lỗi khi quét OCR. Vui lòng thử lại.');
+      alert('Đã xảy ra lỗi khi quét OCR. Vui lòng kiểm tra lại kết nối mạng và thử lại.');
       setStatusText('Thất bại');
     } finally {
       setLoading(false);
@@ -82,7 +85,7 @@ export const OCRModal: React.FC = () => {
 
         const x = bbox.x0 * scaleFactor;
         const y = bbox.y0 * scaleFactor;
-        const width = Math.max((bbox.x1 - bbox.x0) * scaleFactor, 100);
+        const width = Math.max((bbox.x1 - bbox.x0) * scaleFactor, 120);
         const height = Math.max((bbox.y1 - bbox.y0) * scaleFactor, 18);
 
         // 1. Whiteout original scanned line on PDF page image
