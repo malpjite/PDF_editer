@@ -31,6 +31,7 @@ export const Header: React.FC = () => {
     annotations,
     watermark,
     pageNumbering,
+    metadata,
     scale,
     setScale,
     theme,
@@ -62,7 +63,9 @@ export const Header: React.FC = () => {
         deletedPages,
         annotations,
         watermark,
-        pageNumbering
+        pageNumbering,
+        metadata,
+        scale
       );
 
       const blob = new Blob([exportedBytes.buffer as ArrayBuffer], { type: 'application/pdf' });

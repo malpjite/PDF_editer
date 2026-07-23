@@ -1,4 +1,5 @@
 import { PDFDocument, rgb, degrees, StandardFonts } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
 import type { Annotation, WatermarkOptions, PageNumberOptions, PDFMetadata } from '../types/pdf';
 
 // Convert hex color (#rrggbb) or rgba to pdf-lib rgb
@@ -19,6 +20,22 @@ const parseColor = (colorStr: string) => {
   return rgb(0.38, 0.4, 0.95);
 };
 
+// Fetch and cache the embedded Unicode font (NotoSans) for Vietnamese support
+let cachedFontBytes: ArrayBuffer | null = null;
+async function getUnicodeFontBytes(): Promise<ArrayBuffer | null> {
+  if (cachedFontBytes) return cachedFontBytes;
+  try {
+    const fontUrl = 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf';
+    const resp = await fetch(fontUrl);
+    if (!resp.ok) throw new Error(`Font fetch failed: ${resp.status}`);
+    cachedFontBytes = await resp.arrayBuffer();
+    return cachedFontBytes;
+  } catch (err) {
+    console.warn('Could not load NotoSans Unicode font, falling back to Helvetica:', err);
+    return null;
+  }
+}
+
 export async function exportModifiedPDF(
   originalPdfBytes: ArrayBuffer,
   pageOrder: number[],
@@ -27,10 +44,14 @@ export async function exportModifiedPDF(
   annotations: Record<number, Annotation[]>,
   watermark?: WatermarkOptions | null,
   pageNumbering?: PageNumberOptions | null,
-  metadata?: PDFMetadata | null
+  metadata?: PDFMetadata | null,
+  viewerScale?: number
 ): Promise<Uint8Array> {
   const originalDoc = await PDFDocument.load(originalPdfBytes);
   const newDoc = await PDFDocument.create();
+
+  // Register fontkit for custom font embedding
+  newDoc.registerFontkit(fontkit);
 
   // Embed Metadata
   if (metadata) {
@@ -41,8 +62,27 @@ export async function exportModifiedPDF(
     if (metadata.creator) newDoc.setCreator(metadata.creator);
   }
 
+  // Attempt to load Unicode font for Vietnamese text support
+  const unicodeFontBytes = await getUnicodeFontBytes();
+  let unicodeFont: any = null;
+  if (unicodeFontBytes) {
+    try {
+      unicodeFont = await newDoc.embedFont(unicodeFontBytes, { subset: true });
+    } catch (e) {
+      console.warn('Failed to embed Unicode font:', e);
+    }
+  }
+
   const standardFont = await newDoc.embedFont(StandardFonts.Helvetica);
   const boldFont = await newDoc.embedFont(StandardFonts.HelveticaBold);
+
+  // Use Unicode font as primary, fallback to standard
+  const textFont = unicodeFont || standardFont;
+  const textBoldFont = unicodeFont || boldFont;
+
+  // The viewer renders at a specific scale (default 1.1). Annotations are
+  // placed in viewer-pixel coordinates. We need to convert them to PDF points.
+  const vScale = viewerScale || 1.1;
 
   const activePageIndices = pageOrder.filter((idx) => !deletedPages.has(idx));
   const totalActivePages = activePageIndices.length;
@@ -62,43 +102,67 @@ export async function exportModifiedPDF(
     const { width: pageWidth, height: pageHeight } = page.getSize();
     const pageAnns = annotations[origIndex] || [];
 
-    // Render annotations
+    // Render annotations - convert viewer coordinates to PDF coordinates
     for (const ann of pageAnns) {
+      // Convert viewer pixel coords -> PDF point coords
+      const pdfX = ann.x / vScale;
+      const pdfY = ann.y / vScale;
+      const pdfW = ann.width / vScale;
+      const pdfH = ann.height / vScale;
+
       if (ann.type === 'text') {
-        const font = ann.bold ? boldFont : standardFont;
+        const font = ann.bold ? textBoldFont : textFont;
         const color = parseColor(ann.color);
+        const pdfFontSize = (ann.fontSize || 14) / vScale;
 
         if (ann.backgroundColor && ann.backgroundColor !== 'transparent') {
           page.drawRectangle({
-            x: ann.x,
-            y: pageHeight - ann.y - ann.height,
-            width: ann.width,
-            height: ann.height,
+            x: pdfX,
+            y: pageHeight - pdfY - pdfH,
+            width: pdfW,
+            height: pdfH,
             color: parseColor(ann.backgroundColor),
           });
         }
 
-        page.drawText(ann.content, {
-          x: ann.x + 4,
-          y: pageHeight - ann.y - ann.fontSize,
-          size: ann.fontSize,
-          font,
-          color,
-        });
+        // Safely draw text - catch encoding errors for unsupported glyphs
+        try {
+          page.drawText(ann.content || '', {
+            x: pdfX + 4,
+            y: pageHeight - pdfY - pdfFontSize,
+            size: pdfFontSize,
+            font,
+            color,
+          });
+        } catch (e) {
+          // If Unicode font fails for some glyphs, try with standard font
+          console.warn('Font encoding error, retrying with fallback:', e);
+          try {
+            page.drawText(ann.content || '', {
+              x: pdfX + 4,
+              y: pageHeight - pdfY - pdfFontSize,
+              size: pdfFontSize,
+              font: standardFont,
+              color,
+            });
+          } catch (e2) {
+            console.error('Cannot render text annotation:', ann.content, e2);
+          }
+        }
       } else if (ann.type === 'draw' || ann.type === 'highlight') {
         if (ann.points && ann.points.length > 1) {
           const color = parseColor(ann.color);
           const isHigh = ann.type === 'highlight' || Boolean(ann.isHighlight);
           const opacity = isHigh ? 0.4 : ann.opacity || 1.0;
-          const thickness = ann.strokeWidth || 3;
+          const thickness = (ann.strokeWidth || 3) / vScale;
 
           for (let p = 0; p < ann.points.length - 1; p++) {
             const p1 = ann.points[p];
             const p2 = ann.points[p + 1];
 
             page.drawLine({
-              start: { x: p1.x, y: pageHeight - p1.y },
-              end: { x: p2.x, y: pageHeight - p2.y },
+              start: { x: p1.x / vScale, y: pageHeight - p1.y / vScale },
+              end: { x: p2.x / vScale, y: pageHeight - p2.y / vScale },
               thickness,
               color,
               opacity,
@@ -107,28 +171,28 @@ export async function exportModifiedPDF(
         }
       } else if (ann.type === 'rectangle') {
         page.drawRectangle({
-          x: ann.x,
-          y: pageHeight - ann.y - ann.height,
-          width: ann.width,
-          height: ann.height,
+          x: pdfX,
+          y: pageHeight - pdfY - pdfH,
+          width: pdfW,
+          height: pdfH,
           borderColor: parseColor(ann.strokeColor),
-          borderWidth: ann.strokeWidth,
+          borderWidth: ann.strokeWidth / vScale,
           color: ann.fillColor !== 'transparent' ? parseColor(ann.fillColor) : undefined,
           opacity: ann.opacity,
         });
       } else if (ann.type === 'whiteout') {
         page.drawRectangle({
-          x: ann.x,
-          y: pageHeight - ann.y - ann.height,
-          width: ann.width,
-          height: ann.height,
+          x: pdfX,
+          y: pageHeight - pdfY - pdfH,
+          width: pdfW,
+          height: pdfH,
           color: rgb(1, 1, 1),
         });
       } else if (ann.type === 'circle') {
-        const rx = ann.width / 2;
-        const ry = ann.height / 2;
-        const cx = ann.x + rx;
-        const cy = pageHeight - ann.y - ry;
+        const rx = pdfW / 2;
+        const ry = pdfH / 2;
+        const cx = pdfX + rx;
+        const cy = pageHeight - pdfY - ry;
 
         page.drawEllipse({
           x: cx,
@@ -136,7 +200,7 @@ export async function exportModifiedPDF(
           xScale: rx,
           yScale: ry,
           borderColor: parseColor(ann.strokeColor),
-          borderWidth: ann.strokeWidth,
+          borderWidth: ann.strokeWidth / vScale,
           color: ann.fillColor !== 'transparent' ? parseColor(ann.fillColor) : undefined,
           opacity: ann.opacity,
         });
@@ -152,10 +216,10 @@ export async function exportModifiedPDF(
 
             if (embeddedImg) {
               page.drawImage(embeddedImg, {
-                x: ann.x,
-                y: pageHeight - ann.y - ann.height,
-                width: ann.width,
-                height: ann.height,
+                x: pdfX,
+                y: pageHeight - pdfY - pdfH,
+                width: pdfW,
+                height: pdfH,
               });
             }
           } catch (e) {
@@ -165,22 +229,32 @@ export async function exportModifiedPDF(
       } else if (ann.type === 'stamp') {
         const stampColor = parseColor(ann.color);
         page.drawRectangle({
-          x: ann.x,
-          y: pageHeight - ann.y - ann.height,
-          width: ann.width,
-          height: ann.height,
+          x: pdfX,
+          y: pageHeight - pdfY - pdfH,
+          width: pdfW,
+          height: pdfH,
           borderColor: stampColor,
-          borderWidth: 3,
+          borderWidth: 3 / vScale,
           color: rgb(1, 1, 1),
         });
 
-        page.drawText(ann.text, {
-          x: ann.x + 10,
-          y: pageHeight - ann.y - 24,
-          size: 16,
-          font: boldFont,
-          color: stampColor,
-        });
+        try {
+          page.drawText(ann.text || '', {
+            x: pdfX + 10 / vScale,
+            y: pageHeight - pdfY - 24 / vScale,
+            size: 16 / vScale,
+            font: textBoldFont,
+            color: stampColor,
+          });
+        } catch (e) {
+          page.drawText(ann.text || '', {
+            x: pdfX + 10 / vScale,
+            y: pageHeight - pdfY - 24 / vScale,
+            size: 16 / vScale,
+            font: boldFont,
+            color: stampColor,
+          });
+        }
       }
     }
 
@@ -190,27 +264,51 @@ export async function exportModifiedPDF(
       if (watermark.isTile) {
         for (let x = 50; x < pageWidth; x += 220) {
           for (let y = 50; y < pageHeight; y += 180) {
-            page.drawText(watermark.text, {
-              x,
-              y,
-              size: watermark.fontSize * 0.6,
-              font: boldFont,
-              color: wmColor,
-              opacity: watermark.opacity,
-              rotate: degrees(watermark.rotation),
-            });
+            try {
+              page.drawText(watermark.text, {
+                x,
+                y,
+                size: watermark.fontSize * 0.6,
+                font: textBoldFont,
+                color: wmColor,
+                opacity: watermark.opacity,
+                rotate: degrees(watermark.rotation),
+              });
+            } catch {
+              page.drawText(watermark.text, {
+                x,
+                y,
+                size: watermark.fontSize * 0.6,
+                font: boldFont,
+                color: wmColor,
+                opacity: watermark.opacity,
+                rotate: degrees(watermark.rotation),
+              });
+            }
           }
         }
       } else {
-        page.drawText(watermark.text, {
-          x: pageWidth / 4,
-          y: pageHeight / 2,
-          size: watermark.fontSize,
-          font: boldFont,
-          color: wmColor,
-          opacity: watermark.opacity,
-          rotate: degrees(watermark.rotation),
-        });
+        try {
+          page.drawText(watermark.text, {
+            x: pageWidth / 4,
+            y: pageHeight / 2,
+            size: watermark.fontSize,
+            font: textBoldFont,
+            color: wmColor,
+            opacity: watermark.opacity,
+            rotate: degrees(watermark.rotation),
+          });
+        } catch {
+          page.drawText(watermark.text, {
+            x: pageWidth / 4,
+            y: pageHeight / 2,
+            size: watermark.fontSize,
+            font: boldFont,
+            color: wmColor,
+            opacity: watermark.opacity,
+            rotate: degrees(watermark.rotation),
+          });
+        }
       }
     }
 

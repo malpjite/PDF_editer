@@ -51,8 +51,30 @@ const StudioContent: React.FC = () => {
   const handleLoadSamplePdf = async () => {
     try {
       const sampleDoc = await PDFDocument.create();
-      const helveticaFont = await sampleDoc.embedFont(StandardFonts.Helvetica);
-      const helveticaBold = await sampleDoc.embedFont(StandardFonts.HelveticaBold);
+
+      // Try to load Unicode font for Vietnamese characters
+      let mainFont: any;
+      let boldFont: any;
+      let useUnicode = false;
+
+      try {
+        sampleDoc.registerFontkit((await import('@pdf-lib/fontkit')).default);
+        const fontUrl = 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf';
+        const resp = await fetch(fontUrl);
+        if (resp.ok) {
+          const fontBytes = await resp.arrayBuffer();
+          mainFont = await sampleDoc.embedFont(fontBytes, { subset: true });
+          boldFont = mainFont; // Variable font - same file
+          useUnicode = true;
+        }
+      } catch (e) {
+        console.warn('Could not load Unicode font for sample PDF, using ASCII fallback:', e);
+      }
+
+      if (!useUnicode) {
+        mainFont = await sampleDoc.embedFont(StandardFonts.Helvetica);
+        boldFont = await sampleDoc.embedFont(StandardFonts.HelveticaBold);
+      }
 
       const page1 = sampleDoc.addPage([595.28, 841.89]);
       page1.drawRectangle({
@@ -63,11 +85,15 @@ const StudioContent: React.FC = () => {
         color: rgb(0.97, 0.98, 1.0),
       });
 
-      page1.drawText('HỢP ĐỒNG MẪU & TÀI LIỆU DEMO - STIRLING PDF SUITE', {
+      const title = useUnicode
+        ? 'HỢP ĐỒNG MẪU & TÀI LIỆU DEMO - STIRLING PDF SUITE'
+        : 'HOP DONG MAU & TAI LIEU DEMO - STIRLING PDF SUITE';
+
+      page1.drawText(title, {
         x: 40,
         y: 780,
         size: 16,
-        font: helveticaBold,
+        font: boldFont,
         color: rgb(0.2, 0.25, 0.7),
       });
 
@@ -78,34 +104,55 @@ const StudioContent: React.FC = () => {
         color: rgb(0.38, 0.4, 0.95),
       });
 
-      page1.drawText('Chào mừng bạn đến với Ứng Dụng Chỉnh Sửa PDF Stirling-PDF Powered!', {
+      const subtitle = useUnicode
+        ? 'Chào mừng bạn đến với Ứng Dụng Chỉnh Sửa PDF Stirling-PDF Powered!'
+        : 'Chao mung ban den voi Ung Dung Chinh Sua PDF Stirling-PDF Powered!';
+
+      page1.drawText(subtitle, {
         x: 40,
         y: 730,
         size: 13,
-        font: helveticaBold,
+        font: boldFont,
         color: rgb(0.1, 0.1, 0.2),
       });
 
-      const bodyLines = [
-        'Tài liệu này được tạo tự động để bạn thử nghiệm ngay các tính năng chuyên nghiệp:',
-        '1. Quét OCR AI: Nhận diện chữ Tiếng Việt + Tiếng Anh trên ảnh scan và sửa chữ đè trực tiếp.',
-        '2. Chỉnh sửa Metadata PDF: Đổi Tiêu đề, Tác giả, Từ khóa ẩn bên trong file PDF.',
-        '3. Bố Cục Ghép N-Up Trang: Ghép 2 trang hoặc 4 trang PDF lên 1 tờ A4 để in ấn.',
-        '4. Lọc & Đảo Trang: Đảo ngược thứ tự trang hoặc lọc giữ lại trang chẵn / trang lẻ.',
-        '5. Thêm Chữ Ký Điện Tử & Watermark: Đóng dấu mờ chống sao chép và chèn chữ ký tay.',
-        '6. Trợ Lý AI PDF Copilot: Tóm tắt văn bản, dịch thuật và trả lời câu hỏi thông minh.',
-        '',
-        'Đơn vị yêu cầu: Công ty Công Nghệ Stirling-PDF Studio',
-        'Ngày khởi tạo: 23/07/2026',
-      ];
+      const bodyLines = useUnicode
+        ? [
+            'Tài liệu này được tạo tự động để bạn thử nghiệm ngay các tính năng chuyên nghiệp:',
+            '1. Quét OCR AI: Nhận diện chữ Tiếng Việt + Tiếng Anh trên ảnh scan.',
+            '2. Chỉnh sửa Metadata PDF: Đổi Tiêu đề, Tác giả, Từ khóa.',
+            '3. Bố Cục Ghép N-Up Trang: Ghép 2 hoặc 4 trang PDF lên 1 tờ A4.',
+            '4. Lọc & Đảo Trang: Đảo ngược thứ tự hoặc lọc trang chẵn / lẻ.',
+            '5. Thêm Chữ Ký Điện Tử & Watermark: Đóng dấu mờ chống sao chép.',
+            '6. Trợ Lý AI PDF Copilot: Tóm tắt văn bản và trả lời câu hỏi.',
+            '',
+            'Đơn vị yêu cầu: Công ty Công Nghệ Stirling-PDF Studio',
+            'Ngày khởi tạo: 23/07/2026',
+          ]
+        : [
+            'Tai lieu nay duoc tao tu dong de ban thu nghiem cac tinh nang:',
+            '1. Quet OCR AI: Nhan dien chu Tieng Viet + Tieng Anh tren anh scan.',
+            '2. Chinh sua Metadata PDF: Doi Tieu de, Tac gia, Tu khoa.',
+            '3. Bo Cuc Ghep N-Up Trang: Ghep 2 hoac 4 trang PDF len 1 to A4.',
+            '4. Loc & Dao Trang: Dao nguoc thu tu hoac loc trang chan / le.',
+            '5. Them Chu Ky Dien Tu & Watermark: Dong dau mo chong sao chep.',
+            '6. Tro Ly AI PDF Copilot: Tom tat van ban va tra loi cau hoi.',
+            '',
+            'Don vi yeu cau: Cong ty Cong Nghe Stirling-PDF Studio',
+            'Ngay khoi tao: 23/07/2026',
+          ];
 
       let yPos = 690;
       bodyLines.forEach((line) => {
+        if (line === '') {
+          yPos -= 12;
+          return;
+        }
         page1.drawText(line, {
           x: 40,
           y: yPos,
           size: 11,
-          font: line.startsWith('1.') || line.startsWith('Đơn vị') ? helveticaBold : helveticaFont,
+          font: line.startsWith('1.') || line.startsWith('Don vi') || line.startsWith('Đơn vị') ? boldFont : mainFont,
           color: rgb(0.2, 0.2, 0.3),
         });
         yPos -= 24;
@@ -120,28 +167,42 @@ const StudioContent: React.FC = () => {
         borderWidth: 1,
         color: rgb(1, 1, 1),
       });
-      page1.drawText('ĐẠI DIỆN BÊN A (KÝ TÊN TẠI ĐÂY)', {
+
+      const signLabel = useUnicode
+        ? 'ĐẠI DIỆN BÊN A (KÝ TÊN TẠI ĐÂY)'
+        : 'DAI DIEN BEN A (KY TEN TAI DAY)';
+
+      page1.drawText(signLabel, {
         x: 50,
         y: 440,
         size: 10,
-        font: helveticaBold,
+        font: boldFont,
         color: rgb(0.38, 0.4, 0.95),
       });
 
       const page2 = sampleDoc.addPage([595.28, 841.89]);
-      page2.drawText('TRANG 2: BẢNG TỔNG HỢP DỰ ÁN', {
+
+      const page2Title = useUnicode
+        ? 'TRANG 2: BẢNG TỔNG HỢP DỰ ÁN'
+        : 'TRANG 2: BANG TONG HOP DU AN';
+
+      page2.drawText(page2Title, {
         x: 40,
         y: 780,
         size: 16,
-        font: helveticaBold,
+        font: boldFont,
         color: rgb(0.2, 0.25, 0.7),
       });
 
-      page2.drawText('Thử nghiệm chèn trang mới, nhân bản hoặc trích xuất trang này!', {
+      const page2Sub = useUnicode
+        ? 'Thử nghiệm chèn trang mới, nhân bản hoặc trích xuất trang này!'
+        : 'Thu nghiem chen trang moi, nhan ban hoac trich xuat trang nay!';
+
+      page2.drawText(page2Sub, {
         x: 40,
         y: 740,
         size: 12,
-        font: helveticaFont,
+        font: mainFont,
         color: rgb(0.4, 0.4, 0.5),
       });
 
@@ -149,6 +210,7 @@ const StudioContent: React.FC = () => {
       await loadBytes(bytes, 'Demo_Document_StirlingPDF.pdf');
     } catch (e) {
       console.error('Failed to load sample PDF:', e);
+      alert('Không thể tạo PDF mẫu. Lỗi: ' + e);
     }
   };
 

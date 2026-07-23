@@ -4,7 +4,7 @@ import { createWorker } from 'tesseract.js';
 import { Sparkles, X, Copy, Check, RefreshCw, Layers, Edit3 } from 'lucide-react';
 
 export const OCRModal: React.FC = () => {
-  const { pdfDocument, currentPage, pageOrder, addAnnotation, setActiveModal } = usePDF();
+  const { pdfDocument, currentPage, pageOrder, scale, addAnnotation, setActiveModal } = usePDF();
   const [lang, setLang] = useState<'vie' | 'eng' | 'vie+eng'>('vie+eng');
   const [loading, setLoading] = useState<boolean>(false);
   const [progress, setProgress] = useState<number>(0);
@@ -75,7 +75,10 @@ export const OCRModal: React.FC = () => {
     const originalPageIndex = pageOrder[currentPage - 1] ?? (currentPage - 1);
     const editedLines = extractedText.split('\n').filter((l) => l.trim().length > 0);
 
-    const scaleFactor = 0.5; // Scale down from 2.0 resolution render
+    // OCR renders at scale 2.0. Viewer displays at `scale` (default 1.1).
+    // Convert OCR pixel coords -> viewer pixel coords: multiply by (viewerScale / ocrScale)
+    const ocrScale = 2.0;
+    const scaleFactor = scale / ocrScale;
 
     if (ocrLines.length > 0) {
       editedLines.forEach((lineText, idx) => {
